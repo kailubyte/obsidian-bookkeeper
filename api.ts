@@ -129,11 +129,19 @@ export class OpenLibraryAPI {
         return null;
       }
       
-      // Sanitize all string fields for XSS protection
+      // Sanitize all string fields using context-aware methods
+      const titleResult = ValidationUtils.sanitizeForDisplay(this.safeStringExtract(doc.title) || 'Unknown Title');
+      const authorResult = ValidationUtils.sanitizeForDisplay(this.safeArrayStringExtract(doc.author_name) || 'Unknown Author');
+      const isbnResult = ValidationUtils.validateISBN(isbn);
+
+      if (!titleResult.success || !authorResult.success || !isbnResult.success) {
+        throw new Error('Failed to sanitize book data from API response');
+      }
+
       const bookData: BookData = {
-        title: ValidationUtils.sanitizeString(this.safeStringExtract(doc.title) || 'Unknown Title'),
-        author: ValidationUtils.sanitizeString(this.safeArrayStringExtract(doc.author_name) || 'Unknown Author'),
-        isbn: ValidationUtils.sanitizeString(isbn),
+        title: titleResult.data,
+        author: authorResult.data,
+        isbn: isbnResult.data,
         status: 'to-read' as const
       };
       
@@ -158,10 +166,19 @@ export class OpenLibraryAPI {
 
   private static transformToBookData(bookInfo: OpenLibraryBook, isbn: string): BookData {
     try {
+      // Sanitize all string fields using context-aware methods
+      const titleResult = ValidationUtils.sanitizeForDisplay(bookInfo.title || 'Unknown Title');
+      const authorResult = ValidationUtils.sanitizeForDisplay(bookInfo.authors?.[0]?.name || 'Unknown Author');
+      const isbnResult = ValidationUtils.validateISBN(isbn);
+
+      if (!titleResult.success || !authorResult.success || !isbnResult.success) {
+        throw new Error('Failed to sanitize book data from API response');
+      }
+
       const bookData: BookData = {
-        title: ValidationUtils.sanitizeString(bookInfo.title || 'Unknown Title'),
-        author: ValidationUtils.sanitizeString(bookInfo.authors?.[0]?.name || 'Unknown Author'),
-        isbn: ValidationUtils.sanitizeString(isbn),
+        title: titleResult.data,
+        author: authorResult.data,
+        isbn: isbnResult.data,
         status: 'to-read' as const
       };
       
@@ -193,11 +210,8 @@ export class OpenLibraryAPI {
   // Helper methods for safe data extraction
   private static safeStringExtract(value: unknown): string | undefined {
     if (typeof value === 'string' && value.trim().length > 0) {
-      try {
-        return ValidationUtils.sanitizeString(value);
-      } catch {
-        return undefined;
-      }
+      const result = ValidationUtils.sanitizeForDisplay(value);
+      return result.success ? result.data : undefined;
     }
     return undefined;
   }

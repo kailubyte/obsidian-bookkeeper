@@ -219,10 +219,19 @@ export class BaseManager {
     const status = isBookStatus(entry.Status) ? entry.Status : 'to-read';
     
     try {
+      // Sanitize all string fields using context-aware methods
+      const titleResult = ValidationUtils.sanitizeForDisplay((entry.Title as string) || '');
+      const authorResult = ValidationUtils.sanitizeForDisplay((entry.Author as string) || '');
+      const isbnResult = ValidationUtils.validateISBN((entry.ISBN as string) || '');
+
+      if (!titleResult.success || !authorResult.success) {
+        throw new Error('Failed to sanitize required book data fields');
+      }
+
       const bookData: BookData = {
-        title: ValidationUtils.sanitizeString((entry.Title as string) || ''),
-        author: ValidationUtils.sanitizeString((entry.Author as string) || ''),
-        isbn: ValidationUtils.sanitizeString((entry.ISBN as string) || ''),
+        title: titleResult.data,
+        author: authorResult.data,
+        isbn: isbnResult.success ? isbnResult.data : (entry.ISBN as string) || '',
         status
       };
       
@@ -265,11 +274,8 @@ export class BaseManager {
 
   private safeStringValue(value: unknown): string | undefined {
     if (typeof value === 'string' && value.trim().length > 0) {
-      try {
-        return ValidationUtils.sanitizeString(value);
-      } catch {
-        return undefined;
-      }
+      const result = ValidationUtils.sanitizeForDisplay(value);
+      return result.success ? result.data : undefined;
     }
     return undefined;
   }

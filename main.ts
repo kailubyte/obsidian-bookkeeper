@@ -389,30 +389,43 @@ export default class BookTrackerPlugin extends Plugin {
   }
 
   private sanitizeFileName(fileName: string): SafeFileName {
-    try {
-      return ValidationUtils.sanitizeFileName(fileName);
-    } catch (error) {
-      console.error('Error sanitizing filename:', error);
+    const result = ValidationUtils.sanitizeFileName(fileName);
+    if (result.success) {
+      return result.data;
+    } else {
+      console.error('Error sanitizing filename:', result.error);
       // Fallback to a safe default
-      return ValidationUtils.sanitizeFileName('untitled');
+      const fallbackResult = ValidationUtils.sanitizeFileName('untitled');
+      return fallbackResult.success ? fallbackResult.data : 'untitled' as SafeFileName;
     }
   }
 
   private processTemplate(template: string, bookData: BookData): string {
     try {
-      // Sanitize template input to prevent XSS
-      const safeTemplate = ValidationUtils.sanitizeString(template);
+      // Sanitize template input using context-aware method
+      const templateResult = ValidationUtils.sanitizeForTemplate(template);
+      if (!templateResult.success) {
+        throw new Error(`Template sanitization failed: ${templateResult.error}`);
+      }
       
-      return safeTemplate
-        .replace(/\{\{title\}\}/g, ValidationUtils.sanitizeString(bookData.title || ''))
-        .replace(/\{\{author\}\}/g, ValidationUtils.sanitizeString(bookData.author || ''))
-        .replace(/\{\{isbn\}\}/g, ValidationUtils.sanitizeString(bookData.isbn || ''))
-        .replace(/\{\{status\}\}/g, ValidationUtils.sanitizeString(bookData.status || ''))
-        .replace(/\{\{pages\}\}/g, ValidationUtils.sanitizeString(bookData.pages?.toString() || ''))
-        .replace(/\{\{publisher\}\}/g, ValidationUtils.sanitizeString(bookData.publisher || ''))
-        .replace(/\{\{year_published\}\}/g, ValidationUtils.sanitizeString(bookData.year_published || ''))
-        .replace(/\{\{genre\}\}/g, ValidationUtils.sanitizeString(bookData.genre || ''))
-        .replace(/\{\{rating\}\}/g, ValidationUtils.sanitizeString(bookData.rating?.toString() || ''));
+      // Helper function to safely get sanitized replacement values
+      const getSafeReplacement = (value: string | number | undefined): string => {
+        if (value === undefined || value === null) return '';
+        const stringValue = String(value);
+        const result = ValidationUtils.sanitizeForTemplate(stringValue);
+        return result.success ? result.data : '';
+      };
+
+      return templateResult.data
+        .replace(/\{\{title\}\}/g, getSafeReplacement(bookData.title))
+        .replace(/\{\{author\}\}/g, getSafeReplacement(bookData.author))
+        .replace(/\{\{isbn\}\}/g, getSafeReplacement(bookData.isbn))
+        .replace(/\{\{status\}\}/g, getSafeReplacement(bookData.status))
+        .replace(/\{\{pages\}\}/g, getSafeReplacement(bookData.pages))
+        .replace(/\{\{publisher\}\}/g, getSafeReplacement(bookData.publisher))
+        .replace(/\{\{year_published\}\}/g, getSafeReplacement(bookData.year_published))
+        .replace(/\{\{genre\}\}/g, getSafeReplacement(bookData.genre))
+        .replace(/\{\{rating\}\}/g, getSafeReplacement(bookData.rating));
     } catch (error) {
       console.error('Error processing template:', error);
       return 'Error: Invalid template content detected';
