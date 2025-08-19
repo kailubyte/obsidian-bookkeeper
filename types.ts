@@ -182,21 +182,38 @@ export function isBaseFileData(obj: unknown): obj is BaseFileData {
 
 // Security validation utilities
 export const ValidationUtils = {
-  // XSS protection - sanitize HTML/script content
+  // XSS protection - sanitize HTML/script content with iterative cleaning
   sanitizeString(input: string): SanitizedString {
     if (typeof input !== 'string') {
       throw new Error('Input must be a string');
     }
     
-    // Remove potential XSS vectors
-    const sanitized = input
-      .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-      .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, '')
-      .replace(/javascript:/gi, '')
-      .replace(/on\w+\s*=/gi, '')
-      .replace(/data:text\/html/gi, '')
-      .replace(/vbscript:/gi, '')
-      .trim();
+    let sanitized = input;
+    let previous: string;
+    
+    // Iteratively remove dangerous patterns until no more changes occur
+    // This prevents reintroduction of patterns after partial removal
+    do {
+      previous = sanitized;
+      
+      // Remove script tags (handle various malformed cases)
+      sanitized = sanitized.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, '');
+      
+      // Remove iframe tags (handle various malformed cases)  
+      sanitized = sanitized.replace(/<iframe\b[^>]*>[\s\S]*?<\/iframe\s*>/gi, '');
+      
+      // Remove all dangerous URL schemes
+      sanitized = sanitized.replace(/(?:javascript|vbscript|data):/gi, '');
+      
+      // Remove event handlers
+      sanitized = sanitized.replace(/on\w+\s*=/gi, '');
+      
+      // Remove any remaining HTML tags as fallback
+      sanitized = sanitized.replace(/<[^>]*>/g, '');
+      
+    } while (sanitized !== previous);
+    
+    sanitized = sanitized.trim();
     
     if (sanitized !== input) {
       throw new Error('Potential XSS content detected and removed');
