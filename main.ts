@@ -1,4 +1,4 @@
-import { App, Modal, Notice, Plugin, Setting, TextComponent } from 'obsidian';
+import { App, Modal, Notice, Plugin, Setting, TextComponent, requestUrl } from 'obsidian';
 import { OpenLibraryAPI } from './api';
 import { BaseManager } from './base-manager';
 import { BookTrackerSettingTab, DEFAULT_SETTINGS } from './settings';
@@ -345,6 +345,9 @@ export default class BookTrackerPlugin extends Plugin {
 
   private async addBookToBase(bookData: BookData) {
     try {
+      // Download cover image before adding to base
+      await this.downloadBookCover(bookData);
+      
       const added = await this.baseManager.addBookToBase(this.settings.baseFilePath, bookData);
       
       if (!added) {
@@ -360,6 +363,49 @@ export default class BookTrackerPlugin extends Plugin {
     } catch (error) {
       console.error('Error adding book to base:', error);
       throw error;
+    }
+  }
+
+  private async downloadBookCover(bookData: BookData): Promise<void> {
+    try {
+      // Generate cover URL
+      const coverUrl = `https://covers.openlibrary.org/b/isbn/${bookData.isbn}-M.jpg`;
+      
+      // Create covers directory if it doesn't exist
+      const coversDir = '.obsidian/plugins/bookkeeper/covers';
+      const coverPath = `${coversDir}/${bookData.isbn}.jpg`;
+      
+      // Check if cover already exists
+      const existingFile = this.app.vault.getAbstractFileByPath(coverPath);
+      if (existingFile) {
+        bookData.cover_path = coverPath;
+        return;
+      }
+      
+      // Ensure covers directory exists
+      const coversDirFile = this.app.vault.getAbstractFileByPath(coversDir);
+      if (!coversDirFile) {
+        await this.app.vault.createFolder(coversDir);
+      }
+      
+      // Download cover image
+      const response = await requestUrl({
+        url: coverUrl,
+        method: 'GET',
+        headers: {
+          'User-Agent': 'Obsidian-BookTracker/1.0.0'
+        },
+      });
+      
+      // Save image to vault
+      if (response.arrayBuffer) {
+        await this.app.vault.createBinary(coverPath, response.arrayBuffer);
+        bookData.cover_path = coverPath;
+        console.log(`Downloaded cover for ${bookData.title}`);
+      }
+    } catch (error) {
+      console.warn(`Failed to download cover for ${bookData.title}:`, error);
+      // Don't throw error - book should still be added even if cover fails
     }
   }
 
@@ -403,29 +449,79 @@ export default class BookTrackerPlugin extends Plugin {
   private processTemplate(template: string, bookData: BookData): string {
     try {
       // Sanitize template input using context-aware method
+      // This approach uses HTML encoding instead of vulnerable regex pattern detection
       const templateResult = ValidationUtils.sanitizeForTemplate(template);
       if (!templateResult.success) {
         throw new Error(`Template sanitization failed: ${templateResult.error}`);
       }
       
-      // Helper function to safely get sanitized replacement values
+      // Allowed template variables - strict allowlist for security
+      const allowedVariables = new Set([
+        'title', 'author', 'isbn', 'status', 'pages', 'publisher', 
+        'year_published', 'genre', 'rating', 'description', 'cover_path'
+      ]);
+      
+      // Check for any unauthorized template variables using safe template syntax matching
+      // This regex is safe as it only matches template structure, not dangerous content
+      const templateVariablePattern = /\{\{([^}]+)\}\}/g;
+      let match;
+      while ((match = templateVariablePattern.exec(templateResult.data)) !== null) {
+        const variableName = match[1]?.trim();
+        if (variableName && !allowedVariables.has(variableName)) {
+          throw new Error(`Unauthorized template variable detected: ${variableName}. Only these variables are allowed: ${Array.from(allowedVariables).join(', ')}`);
+        }
+      }
+      
+      // Helper function to safely get sanitized replacement values with strict validation
       const getSafeReplacement = (value: string | number | undefined): string => {
         if (value === undefined || value === null) return '';
         const stringValue = String(value);
-        const result = ValidationUtils.sanitizeForTemplate(stringValue);
-        return result.success ? result.data : '';
+        
+        // Use proper HTML encoding instead of regex pattern detection
+        // This is more secure as it encodes dangerous characters rather than trying to detect them
+        const result = ValidationUtils.sanitizeForDisplay(stringValue);
+        if (!result.success) {
+          console.warn('Template replacement value sanitization failed, using safe fallback');
+          return '[SANITIZED]';
+        }
+        
+        return result.data;
       };
 
-      return templateResult.data
-        .replace(/\{\{title\}\}/g, getSafeReplacement(bookData.title))
-        .replace(/\{\{author\}\}/g, getSafeReplacement(bookData.author))
-        .replace(/\{\{isbn\}\}/g, getSafeReplacement(bookData.isbn))
-        .replace(/\{\{status\}\}/g, getSafeReplacement(bookData.status))
-        .replace(/\{\{pages\}\}/g, getSafeReplacement(bookData.pages))
-        .replace(/\{\{publisher\}\}/g, getSafeReplacement(bookData.publisher))
-        .replace(/\{\{year_published\}\}/g, getSafeReplacement(bookData.year_published))
-        .replace(/\{\{genre\}\}/g, getSafeReplacement(bookData.genre))
-        .replace(/\{\{rating\}\}/g, getSafeReplacement(bookData.rating));
+      // Process template with iterative replacement to prevent bypass attacks
+      let processedTemplate: string = templateResult.data;
+      let previousTemplate: string;
+      let iterations = 0;
+      const maxIterations = 5;
+      
+      do {
+        previousTemplate = processedTemplate;
+        processedTemplate = processedTemplate
+          .replace(/\{\{title\}\}/g, getSafeReplacement(bookData.title))
+          .replace(/\{\{author\}\}/g, getSafeReplacement(bookData.author))
+          .replace(/\{\{isbn\}\}/g, getSafeReplacement(bookData.isbn))
+          .replace(/\{\{status\}\}/g, getSafeReplacement(bookData.status))
+          .replace(/\{\{pages\}\}/g, getSafeReplacement(bookData.pages))
+          .replace(/\{\{publisher\}\}/g, getSafeReplacement(bookData.publisher))
+          .replace(/\{\{year_published\}\}/g, getSafeReplacement(bookData.year_published))
+          .replace(/\{\{genre\}\}/g, getSafeReplacement(bookData.genre))
+          .replace(/\{\{rating\}\}/g, getSafeReplacement(bookData.rating))
+          .replace(/\{\{description\}\}/g, getSafeReplacement(bookData.description))
+          .replace(/\{\{cover_path\}\}/g, getSafeReplacement(bookData.cover_path));
+        iterations++;
+      } while (processedTemplate !== previousTemplate && iterations < maxIterations);
+      
+      // Final security: Apply HTML encoding to the entire processed template
+      // This ensures any remaining special characters are properly encoded for display
+      const finalSanitization = ValidationUtils.sanitizeForDisplay(processedTemplate);
+      if (!finalSanitization.success) {
+        console.error('Template final sanitization failed');
+        return 'Error: Template sanitization failed';
+      }
+      
+      const finalTemplate = finalSanitization.data;
+
+      return finalTemplate;
     } catch (error) {
       console.error('Error processing template:', error);
       return 'Error: Invalid template content detected';

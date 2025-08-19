@@ -59,6 +59,8 @@ export class BaseManager {
         { name: 'Genre', type: 'text' },
         { name: 'Publisher', type: 'text' },
         { name: 'Year_Published', type: 'text' },
+        { name: 'Description', type: 'text' },
+        { name: 'Cover_Path', type: 'text' },
         { name: 'Notes_Link', type: 'link' }
       ],
       entries: []
@@ -211,6 +213,8 @@ export class BaseManager {
       Genre: bookData.genre || '',
       Publisher: bookData.publisher || '',
       Year_Published: bookData.year_published || '',
+      Description: bookData.description || '',
+      Cover_Path: bookData.cover_path || '',
       Notes_Link: bookData.notes_link || ''
     };
   }
@@ -258,6 +262,12 @@ export class BaseManager {
       
       const notesLink = this.safeStringValue(entry.Notes_Link);
       if (notesLink !== undefined) bookData.notes_link = notesLink;
+      
+      const description = this.safeStringValue(entry.Description);
+      if (description !== undefined) bookData.description = description;
+      
+      const coverPath = this.safeStringValue(entry.Cover_Path);
+      if (coverPath !== undefined) bookData.cover_path = coverPath;
       
       return bookData;
     } catch (error) {

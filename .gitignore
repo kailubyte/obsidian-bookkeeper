@@ -39,3 +39,8 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+
+# Claude Code specific files
+CLAUDE.md
+code-scanning-alerts.txt
+*.claude.md

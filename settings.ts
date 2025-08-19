@@ -6,15 +6,21 @@ export const DEFAULT_SETTINGS: BookTrackerSettings = {
   baseFilePath: 'Books.base',
   noteTemplate: `# {{title}}
 
+![Book Cover]({{cover_path}})
+
 **Author:** {{author}}
+**Published:** {{year_published}}
+**Pages:** {{pages}}
+**Genre:** {{genre}}
+**Publisher:** {{publisher}}
 **ISBN:** {{isbn}}
 **Status:** {{status}}
-**Pages:** {{pages}}
-**Publisher:** {{publisher}}
-**Year Published:** {{year_published}}
-**Genre:** {{genre}}
 
-## Notes
+## Description
+
+{{description}}
+
+## My Notes
 
 ## Quotes
 
@@ -84,7 +90,7 @@ export class BookTrackerSettingTab extends PluginSettingTab {
         }));
 
     containerEl.createEl('div', { 
-      text: 'Available template variables: {{title}}, {{author}}, {{isbn}}, {{status}}, {{pages}}, {{publisher}}, {{year_published}}, {{genre}}, {{rating}}',
+      text: 'Available template variables: {{title}}, {{author}}, {{isbn}}, {{status}}, {{pages}}, {{publisher}}, {{year_published}}, {{genre}}, {{rating}}, {{description}}, {{cover_path}}',
       cls: 'setting-item-description'
     });
   }

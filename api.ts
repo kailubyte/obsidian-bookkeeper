@@ -157,6 +157,10 @@ export class OpenLibraryAPI {
       const genre = this.safeStringExtract(this.safeArrayStringExtract(doc.subject));
       if (genre !== undefined) bookData.genre = genre;
       
+      // Extract description - try description field first, fallback to first_sentence
+      const description = this.safeStringExtract(doc.description) || this.safeStringExtract(doc.first_sentence);
+      if (description !== undefined) bookData.description = description;
+      
       return bookData;
     } catch (error) {
       console.error('Search API failed:', error);
