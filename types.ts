@@ -607,11 +607,14 @@ export const ValidationUtils = {
         previousSanitized = sanitized;
         
         // Remove/replace dangerous filesystem patterns iteratively
+        // First handle path separators to prevent reconstruction of .. patterns
         sanitized = sanitized
+          .replace(/[\/\\]+/g, '-') // Replace path separators with single dash FIRST
           .replace(/\.\./g, '') // Remove parent directory references
-          .replace(/\.\.\/+/g, '') // Remove ../ patterns
-          .replace(/\.\.\\+/g, '') // Remove ..\ patterns
-          .replace(/[\/\\]+/g, '-') // Replace path separators with single dash
+          .replace(/\.-\./g, '') // Remove patterns like ".-." that could become ".." after separator replacement
+          .replace(/-\.\.-/g, '-') // Remove patterns like "-...-" 
+          .replace(/^\.\.-/g, '') // Remove leading "..-"
+          .replace(/-\.\.$/g, '') // Remove trailing "-.."
           .replace(/[\x00-\x1f\x80-\x9f]/g, '') // Remove control characters
           .replace(/^\.+/, '') // Remove leading dots
           .replace(/\.+$/, '') // Remove trailing dots (except file extensions)
@@ -853,10 +856,10 @@ export const ValidationUtils = {
       do {
         previousCleaned = cleanedISBN;
         // Decode common HTML entities that might be used in bypass attempts
+        // Process &amp; LAST to prevent double-unescaping vulnerabilities
         cleanedISBN = cleanedISBN
           .replace(/&lt;/g, '<')
           .replace(/&gt;/g, '>')
-          .replace(/&amp;/g, '&')
           .replace(/&quot;/g, '"')
           .replace(/&#39;/g, "'")
           .replace(/&#x2F;/g, '/')
@@ -879,7 +882,8 @@ export const ValidationUtils = {
           .replace(/&#x3B;/g, ';')
           .replace(/&#x3F;/g, '?')
           .replace(/&#x40;/g, '@')
-          .replace(/&#x23;/g, '#');
+          .replace(/&#x23;/g, '#')
+          .replace(/&amp;/g, '&'); // Process &amp; LAST to prevent double-unescaping
         iterations++;
       } while (cleanedISBN !== previousCleaned && iterations < maxIterations);
       
