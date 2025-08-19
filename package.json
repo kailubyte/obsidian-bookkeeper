@@ -1,0 +1,23 @@
+{
+  "name": "obsidian-bookkeeper",
+  "version": "1.0.0",
+  "description": "Your personal library manager with ISBN lookup and reading tracking",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "version": "node version-bump.mjs && git add manifest.json versions.json",
+    "audit": "npm audit --audit-level=moderate"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^18.11.9",
+    "builtin-modules": "3.3.0",
+    "esbuild": "^0.25.9",
+    "obsidian": "latest",
+    "tslib": "2.4.0",
+    "typescript": "5.3.3"
+  }
+}

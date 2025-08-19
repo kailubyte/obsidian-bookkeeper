@@ -1,0 +1,11 @@
+{
+  "id": "book-tracker",
+  "name": "Bookkeeper",
+  "version": "1.0.0",
+  "minAppVersion": "0.15.0",
+  "description": "Your personal library manager with ISBN lookup and reading tracking",
+  "author": "Bookkeeper Team",
+  "authorUrl": "",
+  "fundingUrl": "",
+  "isDesktopOnly": false
+}
