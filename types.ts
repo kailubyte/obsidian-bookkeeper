@@ -423,18 +423,13 @@ export const ValidationUtils = {
     try {
       const normalized = input.normalize('NFKC');
       
-      // For markdown, we need to escape dangerous HTML while allowing markdown syntax
-      // Remove/escape HTML script tags and dangerous attributes
-      let sanitized = normalized
-        .replace(/<script[^>]*>.*?<\/script>/gis, '') // Remove script tags completely
-        .replace(/<iframe[^>]*>.*?<\/iframe>/gis, '') // Remove iframe tags
-        .replace(/on\w+\s*=/gi, 'data-removed=') // Remove event handlers
-        .replace(/javascript:/gi, 'data-removed:') // Remove javascript: URLs
-        .replace(/data:/gi, 'data-removed:'); // Remove data: URLs
+      // For markdown, use HTML encoding to prevent any HTML/script injection
+      // This safely converts < > to &lt; &gt; making any HTML render as text
+      const encoded = this.htmlEncode(normalized);
       
       return {
         success: true,
-        data: sanitized as SafeMarkdownText
+        data: encoded as SafeMarkdownText
       };
     } catch (error) {
       return {
