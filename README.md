@@ -15,7 +15,9 @@ Your personal library manager that integrates with Obsidian Bases to track your 
 - **Auto-Generated Notes**: Create structured book notes with customizable templates
 - **Rich Templates**: Support for title, author, description, cover images, and more
 - **Markdown-Safe Processing**: Clean content without HTML encoding issues
+- **Image Sizing**: Cover images automatically sized (200px width) for optimal display
 - **Flexible Layouts**: Customize note structure to your preferences
+- **YAML Frontmatter**: Properly escaped metadata in note frontmatter
 
 ### 📊 Data Management
 - **Base Integration**: Store books in structured Obsidian Base files
@@ -32,9 +34,11 @@ Your personal library manager that integrates with Obsidian Bases to track your 
 
 ### Smart API System
 1. **Primary Search**: Open Library Book Search API
-2. **Fallback**: Google Books API (if Open Library fails or has incomplete data)
-3. **Data Merging**: Intelligently combines data from both sources for complete information
-4. **Quality Assurance**: Avoids "Unknown" values when real data is available
+2. **Intelligent Completeness Check**: Evaluates data quality (requires title, author, plus 2+ metadata fields)
+3. **Automatic Fallback**: Google Books API when Open Library has incomplete data
+4. **Data Merging**: Intelligently combines the best data from both sources
+5. **HTML Entity Decoding**: Clean, readable text from API responses
+6. **Quality Assurance**: Avoids "Unknown" values when real data is available
 
 ## Installation
 
@@ -49,8 +53,17 @@ Your personal library manager that integrates with Obsidian Bases to track your 
 
 ```bash
 npm install
-npm run dev
+npm run dev          # Development build with watch mode
+npm run build        # Production build
+npm run version      # Update version numbers
+npm audit --audit-level=moderate  # Security audit
 ```
+
+#### Build System
+- **TypeScript**: Strict mode with comprehensive type checking
+- **esbuild**: Fast bundling for development and production
+- **Source Maps**: Available in development mode
+- **Security Auditing**: Regular dependency vulnerability checks
 
 ## Usage
 
@@ -124,7 +137,25 @@ Available for use in note templates:
 ### Cover Images
 - Source: Open Library Covers API
 - Downloads and stores locally in your vault
+- Automatic filename sanitization for cross-platform compatibility
 - Respects rate limits (10 requests/minute)
+- Graceful fallback if cover download fails
+
+## Security & Reliability
+
+### Security Features
+- **XSS Prevention**: Comprehensive HTML entity encoding and validation
+- **Path Traversal Protection**: Secure filename and path sanitization
+- **Input Validation**: ISBN validation with checksum verification
+- **Template Security**: Strict allowlist for template variables
+- **Memory Management**: Proper cleanup to prevent memory leaks
+
+### Reliability Features
+- **Rate Limiting**: Respectful API usage with automatic throttling
+- **Error Recovery**: Graceful handling of API failures and network issues
+- **Data Validation**: Comprehensive validation of all external data
+- **Caching**: Intelligent caching with TTL and modification tracking
+- **Race Condition Protection**: Thread-safe rate limiting and API calls
 
 ## License
 
