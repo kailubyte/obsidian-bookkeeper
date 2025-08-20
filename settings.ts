@@ -4,9 +4,10 @@ import { BookTrackerSettings } from './types';
 
 export const DEFAULT_SETTINGS: BookTrackerSettings = {
   baseFilePath: 'Books.base',
+  coversFolder: 'covers',
   noteTemplate: `# {{title}}
 
-![Book Cover]({{cover_path}})
+![Book Cover|200]({{cover_path}})
 
 **Author:** {{author}}
 **Published:** {{year_published}}
@@ -42,7 +43,7 @@ export class BookTrackerSettingTab extends PluginSettingTab {
     const { containerEl } = this;
 
     containerEl.empty();
-    containerEl.createEl('h2', { text: 'Book Tracker Settings' });
+    containerEl.createEl('h2', { text: 'Bookkeeper Settings' });
 
     new Setting(containerEl)
       .setName('Base file path')
@@ -52,6 +53,17 @@ export class BookTrackerSettingTab extends PluginSettingTab {
         .setValue(this.plugin.settings.baseFilePath)
         .onChange(async (value) => {
           this.plugin.settings.baseFilePath = value || 'Books.base';
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(containerEl)
+      .setName('Covers folder')
+      .setDesc('Folder for storing book cover images (relative to vault root)')
+      .addText(text => text
+        .setPlaceholder('covers')
+        .setValue(this.plugin.settings.coversFolder)
+        .onChange(async (value) => {
+          this.plugin.settings.coversFolder = value || 'covers';
           await this.plugin.saveSettings();
         }));
 
@@ -81,13 +93,19 @@ export class BookTrackerSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName('Note template')
       .setDesc('Template for book notes. Use {{field}} placeholders.')
-      .addTextArea(text => text
-        .setPlaceholder('Enter note template...')
+      .addTextArea(text => {
+        text.setPlaceholder('Enter note template...')
         .setValue(this.plugin.settings.noteTemplate)
         .onChange(async (value) => {
           this.plugin.settings.noteTemplate = value;
           await this.plugin.saveSettings();
-        }));
+        });
+        // Make the textarea much larger
+        text.inputEl.rows = 15;
+        text.inputEl.style.width = '100%';
+        text.inputEl.style.minHeight = '300px';
+        text.inputEl.style.resize = 'vertical';
+      });
 
     containerEl.createEl('div', { 
       text: 'Available template variables: {{title}}, {{author}}, {{isbn}}, {{status}}, {{pages}}, {{publisher}}, {{year_published}}, {{genre}}, {{rating}}, {{description}}, {{cover_path}}',

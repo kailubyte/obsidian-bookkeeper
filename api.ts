@@ -1,5 +1,5 @@
 import { requestUrl } from 'obsidian';
-import { BookData, OpenLibraryBook, OpenLibraryResponse, OpenLibrarySearchResponse, ValidationUtils, ValidatedISBN, isOpenLibraryBook } from './types';
+import { BookData, OpenLibrarySearchResponse, GoogleBooksResponse, ValidationUtils, ValidatedISBN } from './types';
 
 function isError(error: unknown): error is Error {
   return error instanceof Error;
@@ -11,8 +11,8 @@ interface RateLimitState {
 }
 
 export class OpenLibraryAPI {
-  private static readonly BASE_URL = 'https://openlibrary.org/api/books';
   private static readonly SEARCH_URL = 'https://openlibrary.org/search.json';
+  private static readonly GOOGLE_BOOKS_URL = 'https://www.googleapis.com/books/v1/volumes';
   
   // Rate limiting: max 10 requests per minute to be respectful
   private static readonly RATE_LIMIT = 10;
@@ -42,16 +42,38 @@ export class OpenLibraryAPI {
     const cleanISBN = validationResult.data;
     
     try {
-      // Check rate limit before making requests
+      // Try Open Library first
       await this.checkRateLimit();
       
-      const bookData = await this.fetchFromPrimaryAPI(cleanISBN);
-      if (bookData) return bookData;
+      const openLibraryData = await this.fetchFromBookSearchAPI(cleanISBN);
       
-      // Check rate limit again before fallback
+      // Check if Open Library data is reasonably complete (not just title/author)
+      const isOpenLibraryComplete = openLibraryData && 
+        openLibraryData.title && 
+        openLibraryData.author && 
+        openLibraryData.author !== 'Unknown Author' &&
+        openLibraryData.title !== 'Unknown Title' &&
+        // Require at least 2 of these additional fields for "completeness"
+        [openLibraryData.pages, openLibraryData.publisher, openLibraryData.description, openLibraryData.genre].filter(Boolean).length >= 2;
+      
+      if (isOpenLibraryComplete) {
+        return openLibraryData;
+      }
+      
+      // Try Google Books for missing data or as fallback
+      const reason = openLibraryData ? 'incomplete data' : 'no data found';
+      console.log(`Open Library has ${reason}, trying Google Books...`);
       await this.checkRateLimit();
       
-      return await this.fetchFromSearchAPI(cleanISBN);
+      const googleBooksData = await this.fetchFromGoogleBooksAPI(cleanISBN);
+      
+      // Merge data if we have partial data from both sources
+      if (openLibraryData && googleBooksData) {
+        return this.mergeBookData(openLibraryData, googleBooksData);
+      }
+      
+      // Return whichever source has data
+      return googleBooksData || openLibraryData;
     } catch (error) {
       console.error('Error fetching book data:', error);
       const message = isError(error) ? error.message : 'Unknown error occurred';
@@ -59,44 +81,8 @@ export class OpenLibraryAPI {
     }
   }
 
-  private static async fetchFromPrimaryAPI(isbn: string): Promise<BookData | null> {
-    const bibkey = `ISBN:${isbn}`;
-    const url = `${this.BASE_URL}?bibkeys=${bibkey}&format=json&jscmd=data`;
-    
-    try {
-      // Record the request for rate limiting
-      this.recordRequest();
-      
-      const response = await requestUrl({
-        url,
-        method: 'GET',
-        headers: {
-          'User-Agent': 'Obsidian-BookTracker/1.0.0'
-        },
-      });
-      
-      // Validate API response for security
-      const validationResult = ValidationUtils.validateApiResponse(response.json);
-      if (!validationResult.success) {
-        console.warn('Invalid API response structure:', validationResult.error);
-        return null;
-      }
-      
-      const data = validationResult.data as OpenLibraryResponse;
-      const bookInfo = data[bibkey];
-      
-      if (!bookInfo || !isOpenLibraryBook(bookInfo)) {
-        return null;
-      }
-      
-      return this.transformToBookData(bookInfo, isbn);
-    } catch (error) {
-      console.warn('Primary API failed, will try search API:', error);
-      return null;
-    }
-  }
 
-  private static async fetchFromSearchAPI(isbn: string): Promise<BookData | null> {
+  private static async fetchFromBookSearchAPI(isbn: string): Promise<BookData | null> {
     const url = `${this.SEARCH_URL}?isbn=${isbn}&limit=1`;
     
     try {
@@ -129,18 +115,18 @@ export class OpenLibraryAPI {
         return null;
       }
       
-      // Sanitize all string fields using context-aware methods
-      const titleResult = ValidationUtils.sanitizeForDisplay(this.safeStringExtract(doc.title) || 'Unknown Title');
-      const authorResult = ValidationUtils.sanitizeForDisplay(this.safeArrayStringExtract(doc.author_name) || 'Unknown Author');
+      // Extract data with minimal sanitization for better reliability
+      const title = this.safeStringExtract(doc.title) || 'Unknown Title';
+      const author = this.safeArrayStringExtract(doc.author_name) || 'Unknown Author';
       const isbnResult = ValidationUtils.validateISBN(isbn);
 
-      if (!titleResult.success || !authorResult.success || !isbnResult.success) {
-        throw new Error('Failed to sanitize book data from API response');
+      if (!isbnResult.success) {
+        throw new Error('Failed to validate ISBN');
       }
 
       const bookData: BookData = {
-        title: titleResult.data,
-        author: authorResult.data,
+        title: title,
+        author: author,
         isbn: isbnResult.data,
         status: 'to-read' as const
       };
@@ -163,61 +149,225 @@ export class OpenLibraryAPI {
       
       return bookData;
     } catch (error) {
-      console.error('Search API failed:', error);
-      throw new Error('Unable to find book information');
+      console.error('Open Library Search API failed:', error);
+      return null; // Return null to trigger Google Books fallback
     }
   }
 
-  private static transformToBookData(bookInfo: OpenLibraryBook, isbn: string): BookData {
+  private static async fetchFromGoogleBooksAPI(isbn: string): Promise<BookData | null> {
+    const url = `${this.GOOGLE_BOOKS_URL}?q=isbn:${isbn}`;
+    
     try {
-      // Sanitize all string fields using context-aware methods
-      const titleResult = ValidationUtils.sanitizeForDisplay(bookInfo.title || 'Unknown Title');
-      const authorResult = ValidationUtils.sanitizeForDisplay(bookInfo.authors?.[0]?.name || 'Unknown Author');
+      // Record the request for rate limiting
+      this.recordRequest();
+      
+      const response = await requestUrl({
+        url,
+        method: 'GET',
+        headers: {
+          'User-Agent': 'Obsidian-BookTracker/1.0.0'
+        },
+      });
+      
+      // Validate API response for security
+      const validationResult = ValidationUtils.validateApiResponse(response.json);
+      if (!validationResult.success) {
+        console.warn('Invalid Google Books API response:', validationResult.error);
+        return null;
+      }
+      
+      const data = validationResult.data as unknown as GoogleBooksResponse;
+      
+      if (!data.items || !Array.isArray(data.items) || data.items.length === 0) {
+        return null;
+      }
+      
+      const item = data.items[0];
+      const volumeInfo = item?.volumeInfo;
+      
+      if (!volumeInfo || typeof volumeInfo !== 'object') {
+        return null;
+      }
+      
+      // Extract data with minimal sanitization for better reliability
+      const title = this.safeStringExtract(volumeInfo.title) || 'Unknown Title';
+      const author = this.safeArrayStringExtract(volumeInfo.authors) || 'Unknown Author';
       const isbnResult = ValidationUtils.validateISBN(isbn);
 
-      if (!titleResult.success || !authorResult.success || !isbnResult.success) {
-        throw new Error('Failed to sanitize book data from API response');
+      if (!isbnResult.success) {
+        throw new Error('Failed to validate ISBN');
       }
 
       const bookData: BookData = {
-        title: titleResult.data,
-        author: authorResult.data,
+        title: title,
+        author: author,
         isbn: isbnResult.data,
         status: 'to-read' as const
       };
       
-      const pages = this.safeNumberExtract(bookInfo.number_of_pages);
+      const pages = this.safeNumberExtract(volumeInfo.pageCount);
       if (pages !== undefined) bookData.pages = pages;
       
-      const publisher = this.safeStringExtract(bookInfo.publishers?.[0]?.name);
+      const publisher = this.safeStringExtract(volumeInfo.publisher);
       if (publisher !== undefined) bookData.publisher = publisher;
       
-      const yearPublished = this.safeStringExtract(bookInfo.publish_date);
-      if (yearPublished !== undefined) bookData.year_published = yearPublished;
+      // Extract year from publishedDate (format: YYYY-MM-DD or YYYY)
+      const publishedDate = this.safeStringExtract(volumeInfo.publishedDate);
+      if (publishedDate !== undefined) {
+        const year = publishedDate.split('-')[0];
+        if (year && /^\d{4}$/.test(year)) {
+          bookData.year_published = year;
+        }
+      }
       
-      const genre = this.safeStringExtract(bookInfo.subjects?.[0]?.name);
+      const genre = this.safeArrayStringExtract(volumeInfo.categories);
       if (genre !== undefined) bookData.genre = genre;
+      
+      const description = this.safeStringExtract(volumeInfo.description);
+      if (description !== undefined) bookData.description = description;
       
       return bookData;
     } catch (error) {
-      console.error('Error transforming book data:', error);
-      // Return safe defaults if sanitization fails
-      return {
-        title: 'Unknown Title',
-        author: 'Unknown Author',
-        isbn: isbn,
-        status: 'to-read' as const,
-      };
+      console.error('Google Books API failed:', error);
+      return null;
     }
   }
+
+  /**
+   * Merges book data from Open Library and Google Books, preferring the most complete data
+   */
+  private static mergeBookData(openLibraryData: BookData, googleBooksData: BookData): BookData {
+    console.log('Merging data from Open Library and Google Books...');
+    
+    const merged: BookData = {
+      // Prefer non-"Unknown" values and longer descriptions
+      title: this.chooseBestValue(openLibraryData.title, googleBooksData.title, 'Unknown Title') || 'Unknown Title',
+      author: this.chooseBestValue(openLibraryData.author, googleBooksData.author, 'Unknown Author') || 'Unknown Author',
+      isbn: openLibraryData.isbn, // ISBN should be the same
+      status: openLibraryData.status
+    };
+    
+    // Add optional fields only if they have values
+    const pages = openLibraryData.pages || googleBooksData.pages;
+    if (pages !== undefined) merged.pages = pages;
+    
+    const publisher = this.chooseBestValue(openLibraryData.publisher, googleBooksData.publisher);
+    if (publisher !== undefined) merged.publisher = publisher;
+    
+    const year_published = this.chooseBestValue(openLibraryData.year_published, googleBooksData.year_published);
+    if (year_published !== undefined) merged.year_published = year_published;
+    
+    const genre = this.chooseBestValue(openLibraryData.genre, googleBooksData.genre);
+    if (genre !== undefined) merged.genre = genre;
+    
+    const description = this.chooseLongerDescription(openLibraryData.description, googleBooksData.description);
+    if (description !== undefined) merged.description = description;
+    
+    const cover_path = openLibraryData.cover_path || googleBooksData.cover_path;
+    if (cover_path !== undefined) merged.cover_path = cover_path;
+    
+    const notes_link = openLibraryData.notes_link || googleBooksData.notes_link;
+    if (notes_link !== undefined) merged.notes_link = notes_link;
+    
+    return merged;
+  }
+
+  /**
+   * Chooses the better value between two options, avoiding "Unknown" values
+   */
+  private static chooseBestValue(value1?: string, value2?: string, unknownValue?: string): string | undefined {
+    // If one is undefined, return the other
+    if (!value1) return value2;
+    if (!value2) return value1;
+    
+    // If one is "Unknown", prefer the other
+    if (unknownValue) {
+      if (value1 === unknownValue) return value2;
+      if (value2 === unknownValue) return value1;
+    }
+    
+    // Both are valid, prefer the first (Open Library in this context)
+    return value1;
+  }
+
+  /**
+   * Chooses the longer description between two options
+   */
+  private static chooseLongerDescription(desc1?: string, desc2?: string): string | undefined {
+    if (!desc1) return desc2;
+    if (!desc2) return desc1;
+    
+    // Return the longer description
+    return desc1.length >= desc2.length ? desc1 : desc2;
+  }
+
 
   // Helper methods for safe data extraction
   private static safeStringExtract(value: unknown): string | undefined {
     if (typeof value === 'string' && value.trim().length > 0) {
-      const result = ValidationUtils.sanitizeForDisplay(value);
-      return result.success ? result.data : undefined;
+      // Decode HTML entities from API responses
+      return this.decodeHtmlEntities(value.trim());
     }
     return undefined;
+  }
+
+  /**
+   * Decodes HTML entities from API responses with iterative decoding for multiple layers
+   */
+  private static decodeHtmlEntities(text: string): string {
+    let decoded = text;
+    let previousDecoded;
+    let iterations = 0;
+    const maxIterations = 10; // Prevent infinite loops
+    
+    // Common HTML entity mappings
+    const entityMap = new Map([
+      ['&amp;', '&'],
+      ['&lt;', '<'],
+      ['&gt;', '>'],
+      ['&quot;', '"'],
+      ['&#39;', "'"],
+      ['&apos;', "'"],
+      ['&#x2F;', '/'],
+      ['&#x60;', '`'],
+      ['&#x3D;', '='],
+      ['&#x7B;', '{'],
+      ['&#x7D;', '}'],
+      ['&#x28;', '('],
+      ['&#x29;', ')'],
+      ['&#x5B;', '['],
+      ['&#x5D;', ']'],
+      ['&#x5C;', '\\'],
+      ['&#x7C;', '|'],
+      ['&#x5E;', '^'],
+      ['&#x7E;', '~'],
+      ['&#x24;', '$'],
+      ['&#x25;', '%'],
+      ['&#x2B;', '+'],
+      ['&#x3A;', ':'],
+      ['&#x3B;', ';'],
+      ['&#x3F;', '?'],
+      ['&#x40;', '@'],
+      ['&#x23;', '#'],
+      ['&#x20;', ' '],
+      // Handle the specific patterns we're seeing
+      ['&&#x23;x3B&#x3B;', ';'],
+      ['&amp&#x3B;', '&']
+    ]);
+    
+    // Iterative decoding to handle multiple layers of encoding
+    do {
+      previousDecoded = decoded;
+      
+      // Apply all entity replacements
+      for (const [entity, replacement] of entityMap) {
+        decoded = decoded.replace(new RegExp(entity.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), replacement);
+      }
+      
+      iterations++;
+    } while (decoded !== previousDecoded && iterations < maxIterations);
+    
+    return decoded;
   }
 
   private static safeArrayStringExtract(value: unknown): string | undefined {
@@ -234,26 +384,30 @@ export class OpenLibraryAPI {
     return undefined;
   }
 
-  // Rate limiting methods
+  // Rate limiting with proper synchronization to prevent race conditions
+  private static rateLimitLock = Promise.resolve();
+  
   private static async checkRateLimit(): Promise<void> {
-    const now = Date.now();
-    
-    // Clean old requests outside the window
-    this.rateLimitState.requests = this.rateLimitState.requests.filter(
-      timestamp => now - timestamp < this.RATE_WINDOW
-    );
-    
-    // Check if we're at the limit
-    if (this.rateLimitState.requests.length >= this.RATE_LIMIT) {
-      const oldestRequest = Math.min(...this.rateLimitState.requests);
-      const waitTime = this.RATE_WINDOW - (now - oldestRequest) + 100; // Add 100ms buffer
+    this.rateLimitLock = this.rateLimitLock.then(async () => {
+      const now = Date.now();
       
-      if (waitTime > 0) {
-        console.log(`Rate limit reached, waiting ${waitTime}ms`);
-        await this.sleep(waitTime);
-        return this.checkRateLimit(); // Recursive check after waiting
+      // Clean old requests outside the window
+      this.rateLimitState.requests = this.rateLimitState.requests.filter(
+        timestamp => now - timestamp < this.RATE_WINDOW
+      );
+      
+      // Check if we're at the limit
+      if (this.rateLimitState.requests.length >= this.RATE_LIMIT) {
+        const oldestRequest = Math.min(...this.rateLimitState.requests);
+        const waitTime = this.RATE_WINDOW - (now - oldestRequest) + 100; // Add 100ms buffer
+        
+        if (waitTime > 0) {
+          console.log(`Rate limit reached, waiting ${waitTime}ms`);
+          await this.sleep(waitTime);
+        }
       }
-    }
+    });
+    await this.rateLimitLock;
   }
 
   private static recordRequest(): void {

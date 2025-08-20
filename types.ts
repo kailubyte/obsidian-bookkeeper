@@ -44,6 +44,24 @@ export interface OpenLibrarySearchResponse {
   }>;
 }
 
+export interface GoogleBooksResponse {
+  items?: Array<{
+    volumeInfo?: {
+      title?: string;
+      authors?: string[];
+      publishedDate?: string;
+      pageCount?: number;
+      publisher?: string;
+      categories?: string[];
+      description?: string;
+      industryIdentifiers?: Array<{
+        type: string;
+        identifier: string;
+      }>;
+    };
+  }>;
+}
+
 export type BookStatus = 'to-read' | 'reading' | 'completed';
 
 export interface BaseEntry {
@@ -63,6 +81,7 @@ export interface BaseFileData {
 
 export interface BookTrackerSettings {
   baseFilePath: string;
+  coversFolder: string;
   noteTemplate: string;
   createLinkedNotes: boolean;
   defaultStatus: BookStatus;
@@ -116,41 +135,59 @@ export type SanitizationContext =
   | 'isbn'        // For ISBN validation
   | 'url'         // For URL validation;
 
-// Type guards for branded types
+// Validation-based type guards for branded types (more reliable than runtime brand checking)
 export function isSanitizedString(value: unknown): value is SanitizedString {
-  return typeof value === 'string' && (value as any).__brand === 'SanitizedString';
+  if (typeof value !== 'string') return false;
+  const result = ValidationUtils.sanitize(value, 'display');
+  return result.success && result.data === value;
 }
 
 export function isSafeFileName(value: unknown): value is SafeFileName {
-  return typeof value === 'string' && (value as any).__brand === 'SafeFileName';
+  if (typeof value !== 'string') return false;
+  const result = ValidationUtils.sanitizeFileName(value);
+  return result.success && result.data === value;
 }
 
 export function isValidatedISBN(value: unknown): value is ValidatedISBN {
-  return typeof value === 'string' && (value as any).__brand === 'ValidatedISBN';
+  if (typeof value !== 'string') return false;
+  const result = ValidationUtils.validateISBN(value);
+  return result.success && result.data === value;
 }
 
 export function isSafeDisplayText(value: unknown): value is SafeDisplayText {
-  return typeof value === 'string' && (value as any).__brand === 'SafeDisplayText';
+  if (typeof value !== 'string') return false;
+  const result = ValidationUtils.sanitizeForDisplay(value);
+  return result.success && result.data === value;
 }
 
 export function isSafeMarkdownText(value: unknown): value is SafeMarkdownText {
-  return typeof value === 'string' && (value as any).__brand === 'SafeMarkdownText';
+  if (typeof value !== 'string') return false;
+  const result = ValidationUtils.sanitizeForMarkdown(value);
+  return result.success && result.data === value;
 }
 
 export function isValidatedURL(value: unknown): value is ValidatedURL {
-  return typeof value === 'string' && (value as any).__brand === 'ValidatedURL';
+  if (typeof value !== 'string') return false;
+  const result = ValidationUtils.validateURL(value);
+  return result.success && result.data === value;
 }
 
 export function isSecureTemplateString(value: unknown): value is SecureTemplateString {
-  return typeof value === 'string' && (value as any).__brand === 'SecureTemplateString';
+  if (typeof value !== 'string') return false;
+  const result = ValidationUtils.sanitizeForSecureTemplate(value);
+  return result.success && result.data === value;
 }
 
 export function isTrustedAPIResponse(value: unknown): value is TrustedAPIResponse {
-  return typeof value === 'object' && value !== null && (value as any).__brand === 'TrustedAPIResponse';
+  if (!value || typeof value !== 'object') return false;
+  const result = ValidationUtils.validateTrustedAPIResponse(value);
+  return result.success && result.data === value;
 }
 
 export function isValidatedFilePath(value: unknown): value is ValidatedFilePath {
-  return typeof value === 'string' && (value as any).__brand === 'ValidatedFilePath';
+  if (typeof value !== 'string') return false;
+  const result = ValidationUtils.validateFilePath(value);
+  return result.success && result.data === value;
 }
 
 // Utility functions for creating branded types safely with context awareness
@@ -1042,8 +1079,8 @@ export const ValidationUtils = {
       );
     }
 
-    // Simple validation: alphanumeric, underscore, hyphen, dot
-    const validKey = /^[a-zA-Z0-9_.-]+$/.test(key);
+    // Simple validation: alphanumeric, underscore, hyphen, dot, colon (for API keys like "ISBN:123")
+    const validKey = /^[a-zA-Z0-9_.:/-]+$/.test(key);
     if (!validKey) {
       throw this.createValidationError(
         'VALIDATION_ERROR',

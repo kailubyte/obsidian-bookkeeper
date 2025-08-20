@@ -114,12 +114,22 @@ class ISBNModal extends Modal {
   }
 
   onClose() {
-    // Clean up event listeners to prevent memory leaks
+    // Remove ALL event listeners to prevent memory leaks
     if (this.inputElement && this.keyHandler) {
       this.inputElement.removeEventListener('keypress', this.keyHandler);
     }
     
-    // Clear references
+    const submitButton = this.contentEl.querySelector('.mod-cta') as HTMLButtonElement;
+    const cancelButton = this.contentEl.querySelector('button:not(.mod-cta)') as HTMLButtonElement;
+    
+    if (submitButton && this.submitHandler) {
+      submitButton.removeEventListener('click', this.submitHandler);
+    }
+    if (cancelButton && this.cancelHandler) {
+      cancelButton.removeEventListener('click', this.cancelHandler);
+    }
+    
+    // Clear ALL references to prevent memory leaks
     this.submitHandler = undefined;
     this.cancelHandler = undefined;
     this.keyHandler = undefined;
@@ -266,7 +276,18 @@ class ManualBookModal extends Modal {
   }
 
   onClose() {
-    // Clear event handler references
+    // Remove ALL event listeners to prevent memory leaks
+    const submitButton = this.contentEl.querySelector('.mod-cta') as HTMLButtonElement;
+    const cancelButton = this.contentEl.querySelector('button:not(.mod-cta)') as HTMLButtonElement;
+    
+    if (submitButton && this.submitHandler) {
+      submitButton.removeEventListener('click', this.submitHandler);
+    }
+    if (cancelButton && this.cancelHandler) {
+      cancelButton.removeEventListener('click', this.cancelHandler);
+    }
+    
+    // Clear ALL references to prevent memory leaks
     this.submitHandler = undefined;
     this.cancelHandler = undefined;
     
@@ -301,7 +322,7 @@ export default class BookTrackerPlugin extends Plugin {
 
   onunload() {
     // Clear caches to prevent memory leaks
-    BaseManager.clearCache();
+    // No cache to clear in simplified BaseManager
     
     // Clear API rate limit state
     OpenLibraryAPI.clearRateLimit();
@@ -371,9 +392,20 @@ export default class BookTrackerPlugin extends Plugin {
       // Generate cover URL
       const coverUrl = `https://covers.openlibrary.org/b/isbn/${bookData.isbn}-M.jpg`;
       
-      // Create covers directory if it doesn't exist
-      const coversDir = '.obsidian/plugins/bookkeeper/covers';
-      const coverPath = `${coversDir}/${bookData.isbn}.jpg`;
+      // Validate and sanitize covers directory path to prevent path traversal
+      const coversDirResult = ValidationUtils.validateFilePath(this.settings.coversFolder);
+      if (!coversDirResult.success) {
+        throw new Error(`Invalid covers directory: ${coversDirResult.error}`);
+      }
+      const coversDir = coversDirResult.data;
+      
+      // Validate ISBN for filename safety
+      const isbnResult = ValidationUtils.validateISBN(bookData.isbn);
+      if (!isbnResult.success) {
+        throw new Error(`Invalid ISBN for cover filename: ${isbnResult.error}`);
+      }
+      
+      const coverPath = `${coversDir}/${isbnResult.data}.jpg`;
       
       // Check if cover already exists
       const existingFile = this.app.vault.getAbstractFileByPath(coverPath);
@@ -385,7 +417,14 @@ export default class BookTrackerPlugin extends Plugin {
       // Ensure covers directory exists
       const coversDirFile = this.app.vault.getAbstractFileByPath(coversDir);
       if (!coversDirFile) {
-        await this.app.vault.createFolder(coversDir);
+        try {
+          await this.app.vault.createFolder(coversDir);
+        } catch (error) {
+          // Ignore "already exists" errors
+          if (!(error instanceof Error) || !error.message?.includes('already exists')) {
+            throw error;
+          }
+        }
       }
       
       // Download cover image
@@ -409,6 +448,39 @@ export default class BookTrackerPlugin extends Plugin {
     }
   }
 
+  private escapeYamlString(value: string): string {
+    return value
+      .replace(/\\/g, '\\\\')  // Escape backslashes first
+      .replace(/"/g, '\\"')    // Escape quotes
+      .replace(/\n/g, '\\n')   // Escape newlines
+      .replace(/\r/g, '\\r')   // Escape carriage returns
+      .replace(/\t/g, '\\t');  // Escape tabs
+  }
+
+  private createBookFrontmatter(bookData: BookData): string {
+    const properties: string[] = [
+      'tags:',
+      '  - book',
+      `title: "${this.escapeYamlString(bookData.title)}"`,
+      `author: "${this.escapeYamlString(bookData.author)}"`,
+      `isbn: "${this.escapeYamlString(bookData.isbn)}"`,
+      `status: "${this.escapeYamlString(bookData.status)}"`
+    ];
+
+    // Add optional properties if they exist
+    if (bookData.started_date) properties.push(`started_date: "${this.escapeYamlString(bookData.started_date)}"`);
+    if (bookData.finished_date) properties.push(`finished_date: "${this.escapeYamlString(bookData.finished_date)}"`);
+    if (bookData.rating) properties.push(`rating: ${bookData.rating}`);
+    if (bookData.pages) properties.push(`pages: ${bookData.pages}`);
+    if (bookData.genre) properties.push(`genre: "${this.escapeYamlString(bookData.genre)}"`);
+    if (bookData.publisher) properties.push(`publisher: "${this.escapeYamlString(bookData.publisher)}"`);
+    if (bookData.year_published) properties.push(`year_published: "${this.escapeYamlString(bookData.year_published)}"`);
+    if (bookData.description) properties.push(`description: "${this.escapeYamlString(bookData.description)}"`);
+    if (bookData.cover_path) properties.push(`cover_path: "${this.escapeYamlString(bookData.cover_path)}"`);
+
+    return properties.join('\n');
+  }
+
   private async createBookNote(bookData: BookData): Promise<void> {
     try {
       const noteTitle = `${bookData.title} - ${bookData.author}`;
@@ -421,7 +493,11 @@ export default class BookTrackerPlugin extends Plugin {
         return;
       }
 
-      const noteContent = this.processTemplate(this.settings.noteTemplate, bookData);
+      // Create frontmatter with all book properties
+      const frontmatter = this.createBookFrontmatter(bookData);
+      const templateContent = this.processTemplate(this.settings.noteTemplate, bookData);
+      const noteContent = `---\n${frontmatter}\n---\n\n${templateContent}`;
+      
       await this.app.vault.create(notePath, noteContent);
       
       bookData.notes_link = `[[${noteTitle}]]`;
@@ -448,12 +524,8 @@ export default class BookTrackerPlugin extends Plugin {
 
   private processTemplate(template: string, bookData: BookData): string {
     try {
-      // Sanitize template input using context-aware method
-      // This approach uses HTML encoding instead of vulnerable regex pattern detection
-      const templateResult = ValidationUtils.sanitizeForTemplate(template);
-      if (!templateResult.success) {
-        throw new Error(`Template sanitization failed: ${templateResult.error}`);
-      }
+      // Template is trusted content from plugin settings, no need for aggressive sanitization
+      // Just validate template variables for security
       
       // Allowed template variables - strict allowlist for security
       const allowedVariables = new Set([
@@ -461,35 +533,36 @@ export default class BookTrackerPlugin extends Plugin {
         'year_published', 'genre', 'rating', 'description', 'cover_path'
       ]);
       
-      // Check for any unauthorized template variables using safe template syntax matching
-      // This regex is safe as it only matches template structure, not dangerous content
-      const templateVariablePattern = /\{\{([^}]+)\}\}/g;
-      let match;
-      while ((match = templateVariablePattern.exec(templateResult.data)) !== null) {
-        const variableName = match[1]?.trim();
-        if (variableName && !allowedVariables.has(variableName)) {
-          throw new Error(`Unauthorized template variable detected: ${variableName}. Only these variables are allowed: ${Array.from(allowedVariables).join(', ')}`);
-        }
+      // Robust template variable validation to prevent bypass attacks
+      // First normalize the template by removing all valid variables
+      let sanitizedTemplate = template;
+      for (const variable of allowedVariables) {
+        const pattern = new RegExp(`\\{\\{\\s*${variable.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\}\\}`, 'g');
+        sanitizedTemplate = sanitizedTemplate.replace(pattern, '');
       }
       
-      // Helper function to safely get sanitized replacement values with strict validation
+      // Check if any {{ }} patterns remain - these would be unauthorized
+      const remainingVariables = sanitizedTemplate.match(/\{\{.*?\}\}/g);
+      if (remainingVariables && remainingVariables.length > 0) {
+        throw new Error(`Unauthorized template variables detected: ${remainingVariables.join(', ')}. Only these variables are allowed: ${Array.from(allowedVariables).join(', ')}`);
+      }
+      
+      // Helper function to safely get replacement values for Obsidian markdown
       const getSafeReplacement = (value: string | number | undefined): string => {
         if (value === undefined || value === null) return '';
         const stringValue = String(value);
         
-        // Use proper HTML encoding instead of regex pattern detection
-        // This is more secure as it encodes dangerous characters rather than trying to detect them
-        const result = ValidationUtils.sanitizeForDisplay(stringValue);
-        if (!result.success) {
-          console.warn('Template replacement value sanitization failed, using safe fallback');
-          return '[SANITIZED]';
-        }
-        
-        return result.data;
+        // For Obsidian markdown, we only need to escape characters that could break markdown structure
+        // No need for aggressive HTML encoding since Obsidian handles content safely
+        return stringValue
+          .replace(/\\/g, '\\\\')  // Escape backslashes
+          .replace(/\[/g, '\\[')   // Escape square brackets that could create unwanted links
+          .replace(/\]/g, '\\]')
+          .replace(/\|/g, '\\|');  // Escape pipes that could break tables
       };
 
       // Process template with iterative replacement to prevent bypass attacks
-      let processedTemplate: string = templateResult.data;
+      let processedTemplate: string = template;
       let previousTemplate: string;
       let iterations = 0;
       const maxIterations = 5;
@@ -511,17 +584,7 @@ export default class BookTrackerPlugin extends Plugin {
         iterations++;
       } while (processedTemplate !== previousTemplate && iterations < maxIterations);
       
-      // Final security: Apply HTML encoding to the entire processed template
-      // This ensures any remaining special characters are properly encoded for display
-      const finalSanitization = ValidationUtils.sanitizeForDisplay(processedTemplate);
-      if (!finalSanitization.success) {
-        console.error('Template final sanitization failed');
-        return 'Error: Template sanitization failed';
-      }
-      
-      const finalTemplate = finalSanitization.data;
-
-      return finalTemplate;
+      return processedTemplate;
     } catch (error) {
       console.error('Error processing template:', error);
       return 'Error: Invalid template content detected';
